@@ -18,6 +18,7 @@ h1{margin:0;font-size:27px}h2{font-size:15px;margin:18px 0 8px}.sub{color:#68776
 .msg{font-size:13px;color:#68776f;margin-top:10px;line-height:1.4}
 .hist{background:#fff;border:1px solid #dce7e1;border-radius:17px;padding:4px 15px;font-size:14px}
 .hist div{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid #edf3ef}.hist div:last-child{border:0}.hist span:first-child{color:#718078}
+.chart{width:100%;height:170px;display:block}
 @media(max-width:470px){.grid{grid-template-columns:1fr}.map{height:340px}}
 </style>
 </head>
@@ -39,6 +40,11 @@ h1{margin:0;font-size:27px}h2{font-size:15px;margin:18px 0 8px}.sub{color:#68776
 <section class="mapcard">
 <div class="maptitle">🛰️ Tu recorrido</div>
 <div id="map" class="map"></div>
+</section>
+
+<section class="mapcard">
+<div class="maptitle" style="display:flex;justify-content:space-between"><span>⚡ Velocidad en vivo</span><span id="vnow">—</span></div>
+<canvas id="chart" class="chart"></canvas>
 </section>
 
 <div class="actions">
@@ -135,6 +141,35 @@ function render(){
   return '<div><span>'+dd+'/'+m+(k===dayKey()?' (hoy)':'')+'</span><span>'+(v.dist/1000).toFixed(2)+' km · '+fmt(v.secs)+'</span></div>';
  }).join('')||'<div><span>Sin recorridos todavía</span></div>';
 }
+/* ---- gráfico de velocidad (últimos 5 min) ---- */
+let spd=[],lastS=null;
+function pushSpeed(c,t){
+ let v=Number.isFinite(c.speed)?c.speed*3.6:null;
+ if(v===null&&lastS){const dt=(t-lastS.t)/1000;if(dt>0&&dt<30)v=hav([lastS.la,lastS.lo],[c.latitude,c.longitude])/dt*3.6}
+ lastS={la:c.latitude,lo:c.longitude,t};
+ if(v===null||!isFinite(v))return;
+ const n=spd.slice(-2).map(s=>s.v);n.push(Math.max(0,v));
+ spd.push({t,v:n.reduce((a,b)=>a+b,0)/n.length});
+ spd=spd.filter(s=>t-s.t<=300000);
+ drawChart();
+}
+function drawChart(){
+ const cv=$('chart'),w=cv.clientWidth,h=cv.clientHeight,r=window.devicePixelRatio||1;
+ if(!w)return;
+ cv.width=w*r;cv.height=h*r;
+ const g=cv.getContext('2d');g.scale(r,r);
+ const pl=34,pb=18,pt=8,pr=8,W=w-pl-pr,H=h-pt-pb;
+ const now=spd.length?spd[spd.length-1].t:0;
+ const max=Math.max(10,Math.ceil(Math.max(0,...spd.map(s=>s.v))/5)*5);
+ g.font='11px system-ui';g.fillStyle='#718078';g.strokeStyle='#e3ece7';g.lineWidth=1;
+ for(let i=0;i<=2;i++){const y=pt+H-H*i/2;g.beginPath();g.moveTo(pl,y);g.lineTo(w-pr,y);g.stroke();g.textAlign='right';g.fillText(Math.round(max*i/2),pl-5,y+4)}
+ g.textAlign='left';g.fillText('-5 min',pl,h-4);g.textAlign='right';g.fillText('ahora',w-pr,h-4);
+ if(spd.length<2){g.textAlign='center';g.fillText('Inicia el recorrido para ver la velocidad',w/2,h/2);return}
+ g.beginPath();g.strokeStyle='#087a4a';g.lineWidth=2.5;g.lineJoin='round';
+ spd.forEach((s,i)=>{const x=pl+W*(1-(now-s.t)/300000),y=pt+H-H*s.v/max;i?g.lineTo(x,y):g.moveTo(x,y)});
+ g.stroke();
+ $('vnow').textContent=spd[spd.length-1].v.toFixed(1)+' km/h';
+}
 function setPosition(pos,record){
  const c=pos.coords,lat=c.latitude,lon=c.longitude,p=[lat,lon];
  $('lat').textContent=lat.toFixed(6);
@@ -142,6 +177,7 @@ function setPosition(pos,record){
  $('accuracy').textContent=Number.isFinite(c.accuracy)?Math.round(c.accuracy)+' m':'—';
  $('altitude').textContent=Number.isFinite(c.altitude)?Math.round(c.altitude)+' m':'No disponible';
  marker.setLatLng(p);circle.setLatLng(p).setRadius(Number.isFinite(c.accuracy)?c.accuracy:5);
+ if(record)pushSpeed(c,pos.timestamp||Date.now());
  if(follow)map.setView(p,Math.max(map.getZoom(),17));
  if(record){addPoint(lat,lon,c.accuracy,pos.timestamp||Date.now());$('status').textContent='Registrando ruta'}
  else{$('status').textContent='GPS activo';$('msg').textContent='Posición actualizada: '+new Date().toLocaleString('es-CL')}
@@ -168,7 +204,7 @@ $('road').onclick=()=>{if(!map.hasLayer(roads))map.addLayer(roads);if(map.hasLay
 $('start').onclick=()=>{
  if(!navigator.geolocation){$('msg').textContent='Este navegador no admite GPS.';return}
  if(watchId!==null)return;
- follow=true;breakNext=true;
+ follow=true;breakNext=true;spd=[];lastS=null;$('vnow').textContent='—';drawChart();
  watchId=navigator.geolocation.watchPosition(p=>setPosition(p,true),error,{enableHighAccuracy:true,timeout:20000,maximumAge:2000});
  keepAwake();
  $('start').disabled=true;$('stop').disabled=false;$('status').textContent='Buscando GPS…';
@@ -199,6 +235,7 @@ $('reset').onclick=()=>{
 };
 
 /* ---- inicio ---- */
+drawChart();window.addEventListener('resize',drawChart);
 line.setLatLngs(segments());
 render();
 const pts=today().pts;
